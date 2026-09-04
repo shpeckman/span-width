@@ -13,14 +13,14 @@ require "./span-width/tables"
 #   * combining marks (Mn/Me), ZWSP/ZWNJ/ZWJ, word joiner, BOM,
 #     Hangul jamo vowels & final consonants, emoji skin-tone modifiers,
 #     variation selectors, tag characters            -> 0 cells
-#   * a scalar joined by U+200D (ZWJ) adds no cells  (👨‍👩‍👧‍👦 = 2)
+#   * a scalar joined to an emoji by U+200D (ZWJ) adds no cells (👨‍👩‍👧‍👦 = 2)
 #   * a narrow emoji base followed by U+FE0F (VS16)  -> 2 cells (❤️ = 2)
 #   * everything else                                -> 1 cell
 #
 # All measurement is allocation-free: spans are read in place and never
 # copied, so the same `String`/`Slice` you hand in is what streams out.
 module SpanWidth
-  VERSION = "0.1.0"
+  VERSION = "0.2.0"
 
   extend self
 
@@ -35,11 +35,12 @@ module SpanWidth
       validate_contract!(bytes)
     {% end %}
 
-    width  = 0
-    i      = 0
-    size   = bytes.size
-    ptr    = bytes.to_unsafe
-    joined = false # previous scalar was U+200D (ZWJ)
+    width      = 0
+    i          = 0
+    size       = bytes.size
+    ptr        = bytes.to_unsafe
+    joined     = false     # previous scalar was U+200D (ZWJ) following an emoji
+    prev_emoji = false # last width-contributing scalar was 2 cells wide
 
     while i < size
       # Fast path: consume eight ASCII bytes at a time.
@@ -65,15 +66,19 @@ module SpanWidth
         # on virtually every ASCII character.
         if vs16_follows?(ptr, i + 1, size) && in_ranges?(ptr[i].to_u32, VS16_WIDE)
           width += 2
+          prev_emoji = true
         else
           width += 1
+          prev_emoji = false
         end
         i += 1
         joined = false
       else
         cp, len = decode(ptr, i)
         if cp == 0x200D_u32
-          joined = true
+          # ZWJ only joins emoji sequences ("👨‍👩‍👧‍👦"); after anything else
+          # it is just a zero-width format character.
+          joined = prev_emoji
         elsif joined
           joined = false # ZWJ-joined: adds no cells
         else
@@ -82,6 +87,7 @@ module SpanWidth
             w = 2
           end
           width += w
+          prev_emoji = w == 2 unless w == 0
         end
         i += len
       end
