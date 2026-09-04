@@ -57,7 +57,7 @@ describe SpanWidth::Grapheme do
     end
 
     it "breaks around zero-width format characters" do
-      clusters_of("AB").should eq ["A", "", "B"]
+      clusters_of("A\u200BB").should eq ["A", "\u200B", "B"]
     end
 
     it "yields zero-copy views into the span" do

@@ -1,5 +1,6 @@
 # Makefile — span-width shard
 #
+#   make setup          first-time setup: regenerate tables + fixture, run specs
 #   make spec           run the test suite
 #   make spec-debug     run the suite with contract validation (-Dspan_width_debug)
 #   make bench          run both throughput benchmarks (release build)
@@ -17,10 +18,15 @@ UNICODE_VERSION ?= 17.0.0
 
 SOURCES := $(wildcard src/span-width.cr src/span-width/*.cr)
 
-.PHONY: all spec spec-debug bench bench-width bench-grapheme verify \
+.PHONY: all setup spec spec-debug bench bench-width bench-grapheme verify \
         gen-tables gen-tests docs format format-check clean clean-full clean-generated
 
 all: spec
+
+# First-time setup after a fresh clone: the generated tables and fixture
+# are not committed, so regenerate them from the UCD before running specs.
+# Downloads from unicode.org.
+setup: gen-tables gen-tests spec
 
 # NOTE: run from the project root — the grapheme spec reads
 # spec/fixtures/GraphemeBreakTest.txt via a relative path.
@@ -69,8 +75,8 @@ clean:
 	rm -rf docs
 
 # Everything clean removes, plus shards artifacts and any locally built
-# binaries. The generated tables and fixtures are committed sources (they
-# need network access to regenerate) and are deliberately NOT removed.
+# binaries. The generated tables and fixtures (regenerate with make setup)
+# are deliberately NOT removed.
 clean-full: clean
 	rm -rf lib bin .shards
 	rm -f shard.lock
