@@ -1,0 +1,16 @@
+# shard.yml
+name: span-width
+version: 0.1.0
+
+authors:
+  - shpeckman
+
+description: |
+  Streaming terminal cell-width measurement for clean text spans.
+  Feed it spans of plain UTF-8 text (no ANSI escapes, no control
+  characters) and get back the width of each span in terminal cells.
+  Zero dependencies, zero allocations, wcwidth-compatible.
+
+crystal: ">= 1.10.0"
+
+license: MIT

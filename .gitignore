@@ -1,0 +1,8 @@
+/.docs/
+/docs/
+/lib/
+/bin/
+/.shards/
+/shard.lock/
+*.dwarf
+/widths.tsv
