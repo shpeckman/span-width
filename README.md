@@ -27,14 +27,14 @@ eliminated entirely in normal builds.
 What most terminals (xterm, tmux, alacritty, iTerm2) assume — glibc-style
 `wcwidth` plus pragmatic emoji handling:
 
-| scalars                                            | cells |
-| -------------------------------------------------- | ----- |
-| East Asian Wide / Fullwidth (incl. most emoji)     | 2     |
-| combining marks (Mn/Me), ZWSP/ZWNJ/ZWJ, word joiner, BOM, Hangul jamo vowels & finals, skin-tone modifiers, variation selectors, tag chars | 0 |
-| a scalar joined to an emoji by U+200D (ZWJ)        | +0 — `👨‍👩‍👧‍👦` = 2 |
-| narrow emoji base followed by U+FE0F (VS16)        | 2 — `❤️` = 2 |
-| regional indicators                                | 1 each — flags = 2 |
-| everything else                                    | 1     |
+| scalars                                                                                                                                    | cells                  |
+|--------------------------------------------------------------------------------------------------------------------------------------------|------------------------|
+| East Asian Wide / Fullwidth (incl. most emoji)                                                                                             | 2                      |
+| combining marks (Mn/Me), ZWSP/ZWNJ/ZWJ, word joiner, BOM, Hangul jamo vowels & finals, skin-tone modifiers, variation selectors, tag chars | 0                      |
+| a scalar joined to an emoji by U+200D (ZWJ)                                                                                                | +0 — `👨‍👩‍👧‍👦` = 2 |
+| narrow emoji base followed by U+FE0F (VS16)                                                                                                | 2 — `❤️` = 2           |
+| regional indicators                                                                                                                        | 1 each — flags = 2     |
+| everything else                                                                                                                            | 1                      |
 
 Tables are generated from the Unicode Character Database (**Unicode
 17.0.0**) and committed; see *Regenerating the tables* below.
@@ -45,7 +45,7 @@ Tables are generated from the Unicode Character Database (**Unicode
 # shard.yml
 dependencies:
   span-width:
-    github: you/span-width
+    github: shpeckman/span-width
 ```
 
 ```crystal
@@ -118,15 +118,15 @@ end
 Measured with `crystal run --release bench/bench.cr` (x86-64, indicative —
 run it on your own hardware):
 
-| corpus        | scalar mode     | grapheme mode (segment + measure) |
-| ------------- | --------------- | --------------------------------- |
-| ASCII         | ~6.8 GiB/s      | ~60 MiB/s (per-cluster callback)  |
-| Latin-1       | ~350 MiB/s      | ~65 MiB/s                         |
-| CJK           | ~460 MiB/s      | ~130 MiB/s                        |
-| Hangul        | ~380 MiB/s      | ~110 MiB/s                        |
-| emoji-heavy   | ~430 MiB/s      | ~100 MiB/s                        |
-| mixed         | ~500 MiB/s      | ~85 MiB/s                         |
-| short spans   | 14–42 ns/call, **0 B allocated** |                 |
+| corpus      | scalar mode                      | grapheme mode (segment + measure) |
+|-------------|----------------------------------|-----------------------------------|
+| ASCII       | ~6.8 GiB/s                       | ~60 MiB/s (per-cluster callback)  |
+| Latin-1     | ~350 MiB/s                       | ~65 MiB/s                         |
+| CJK         | ~460 MiB/s                       | ~130 MiB/s                        |
+| Hangul      | ~380 MiB/s                       | ~110 MiB/s                        |
+| emoji-heavy | ~430 MiB/s                       | ~100 MiB/s                        |
+| mixed       | ~500 MiB/s                       | ~85 MiB/s                         |
+| short spans | 14–42 ns/call, **0 B allocated** |                                   |
 
 Scalar mode: an 8-bytes-at-a-time ASCII fast path (SWAR), a two-level page
 table (≈32 KB, cache-resident) giving O(1) branch-free per-scalar width for
