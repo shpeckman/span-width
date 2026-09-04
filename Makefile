@@ -21,7 +21,7 @@ SOURCES := $(wildcard src/span-width.cr src/span-width/*.cr)
 .PHONY: all setup spec spec-debug bench bench-width bench-grapheme verify \
         gen-tables gen-tests docs format format-check clean clean-full clean-generated
 
-all: spec
+all: setup
 
 # First-time setup after a fresh clone: the generated tables and fixture
 # are not committed, so regenerate them from the UCD before running specs.
