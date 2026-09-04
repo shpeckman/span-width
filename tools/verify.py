@@ -1,5 +1,5 @@
-# tools/verify.py
 #!/usr/bin/env python3
+# tools/verify.py
 """Cross-check span-width's per-scalar widths against an independent
 implementation: Python's built-in unicodedata.
 

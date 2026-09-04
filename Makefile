@@ -1,3 +1,4 @@
+# Makefile
 # Makefile — span-width shard
 #
 #   make setup          first-time setup: regenerate tables + fixture, run specs

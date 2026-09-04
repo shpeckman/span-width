@@ -82,6 +82,20 @@ describe SpanWidth do
       SpanWidth.measure("👩‍💻").should eq 2
     end
 
+    it "does not let a ZWJ swallow a non-emoji scalar" do
+      SpanWidth.measure("👋‍é").should eq 3  # grapheme clusters: [👋‍][é]
+      SpanWidth.measure("👩‍本").should eq 4  # grapheme clusters: [👩‍][本]
+      SpanWidth.measure("👋‍❤️").should eq 2 # ❤️ is a VS16-widened emoji base
+    end
+
+    it "resets emoji-join state across the 8-byte ASCII fast path" do
+      # The SWAR loop consumes the 8 ASCII bytes; a following ZWJ must not
+      # think the emoji before them was the previous scalar.
+      SpanWidth.measure("👋aaaaaaaa‍👩").should eq 12
+      SpanWidth.measure("👋‍aaaaaaaa本").should eq 12
+      SpanWidth.measure("👋aaaaaaa‍👩").should eq 11 # no full word: scalar path
+    end
+
     it "measures skin-tone-modified emoji as one glyph" do
       SpanWidth.measure("👍🏽").should eq 2
     end
@@ -143,7 +157,7 @@ describe SpanWidth do
 
   describe ".each_line" do
     it "streams lines from an IO" do
-      io        = IO::Memory.new("foo\n日本語\n")
+      io = IO::Memory.new("foo\n日本語\n")
       collected = [] of {String, Int32}
       SpanWidth.each_line(io) { |line, w| collected << {line, w} }
       collected.should eq [{"foo", 3}, {"日本語", 6}]

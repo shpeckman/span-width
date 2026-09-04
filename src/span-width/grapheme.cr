@@ -66,12 +66,12 @@ module SpanWidth::Grapheme
 
     cp, len = decode(ptr, 0)
     prev_gcb, ep, incb = classify(cp)
-    ri_count      = prev_gcb == GCB_RI ? 1 : 0
-    ext_run       = ep      # inside an "Extended_Pictographic Extend*" run
-    zwj_armed     = false # ExtPict Extend* ZWJ seen, GB11 may apply
-    incb_state    = incb == INCB_CONSONANT ? 1 : 0
+    ri_count = prev_gcb == GCB_RI ? 1 : 0
+    ext_run = ep      # inside an "Extended_Pictographic Extend*" run
+    zwj_armed = false # ExtPict Extend* ZWJ seen, GB11 may apply
+    incb_state = incb == INCB_CONSONANT ? 1 : 0
     cluster_start = 0
-    i             = len
+    i = len
 
     while i < size
       cp, len = decode(ptr, i)
@@ -80,10 +80,10 @@ module SpanWidth::Grapheme
       if boundary?(prev_gcb, gcb, ep, ri_count, zwj_armed, incb, incb_state)
         yield bytes[cluster_start, i - cluster_start]
         cluster_start = i
-        ri_count      = 0
-        ext_run       = false
-        zwj_armed     = false
-        incb_state    = 0
+        ri_count = 0
+        ext_run = false
+        zwj_armed = false
+        incb_state = 0
       end
 
       # Fold the current scalar into the cluster state.
@@ -93,15 +93,17 @@ module SpanWidth::Grapheme
         ri_count = 0
       end
       if ep
-        ext_run   = true
+        ext_run = true
         zwj_armed = false
       elsif gcb == GCB_EXTEND
-        # ExtPict Extend* — the run continues
+        # ExtPict Extend* — the run continues; but an Extend after the
+        # arming ZWJ breaks GB11's "ZWJ × ExtPict" adjacency.
+        zwj_armed = false if zwj_armed
       elsif gcb == GCB_ZWJ && ext_run
         zwj_armed = true
-        ext_run   = false
+        ext_run = false
       else
-        ext_run   = false
+        ext_run = false
         zwj_armed = false
       end
       # GB9c conjunct state: 0 = no qualifying prefix, 1 = consonant seen,

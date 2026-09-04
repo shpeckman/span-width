@@ -20,9 +20,14 @@ require "./span-width/tables"
 # All measurement is allocation-free: spans are read in place and never
 # copied, so the same `String`/`Slice` you hand in is what streams out.
 module SpanWidth
-  VERSION = "0.2.0"
+  VERSION = "0.3.0"
 
   extend self
+
+  # Property bits packed into the WIDTH_PAGES bytes (see tables.cr).
+  private WIDTH_EXTPICT_BIT = 0x20_u8
+  private WIDTH_VS16_BIT    = 0x40_u8
+  private WIDTH_EMOJI_BIT   = 0x80_u8
 
   # Width of `span` in terminal cells.
   def measure(span : String) : Int32
@@ -35,12 +40,13 @@ module SpanWidth
       validate_contract!(bytes)
     {% end %}
 
-    width      = 0
-    i          = 0
-    size       = bytes.size
-    ptr        = bytes.to_unsafe
-    joined     = false     # previous scalar was U+200D (ZWJ) following an emoji
-    prev_emoji = false # last width-contributing scalar was 2 cells wide
+    width = 0
+    i = 0
+    size = bytes.size
+    ptr = bytes.to_unsafe
+    joined = false     # previous scalar was U+200D (ZWJ) following an emoji
+    prev_emoji = false # last width-contributing scalar was a pictographic emoji
+    prev_zwj = false   # previous scalar was U+200D (a doubled ZWJ breaks the run)
 
     while i < size
       # Fast path: consume eight ASCII bytes at a time.
@@ -51,43 +57,80 @@ module SpanWidth
         width += 8
         i += 8
       end
-      # The word-gobbling above cannot see a VS16 widening the last ASCII
-      # byte of the final word it consumed ("Score: 1️⃣"); correct for it.
-      if i > swar_start && i < size &&
-         ptr[i] == 0xEF_u8 && vs16_follows?(ptr, i, size) &&
-         in_ranges?(ptr[i - 1].to_u32, VS16_WIDE)
-        width += 1
+      # The word-gobbling above consumes plain ASCII only, so any pending
+      # ZWJ join ends here and the last scalar seen is narrow. It also
+      # cannot see a VS16 widening the last ASCII byte of the final word
+      # it consumed ("Score: 1️⃣"); correct for both.
+      if i > swar_start
+        joined = false
+        prev_emoji = false
+        prev_zwj = false
+        if i < size && ptr[i] == 0xEF_u8 && vs16_follows?(ptr, i, size) &&
+           in_ranges?(ptr[i - 1].to_u32, VS16_WIDE)
+          width += 1
+        end
       end
       break if i >= size
 
       if ptr[i] < 0x80_u8
         # VS16 widens the ASCII emoji bases ('#', '*', digits) to 2 cells.
         # The first byte of U+FE0F is 0xEF, so this check short-circuits
-        # on virtually every ASCII character.
+        # on virtually every ASCII character. No ASCII scalar is
+        # Extended_Pictographic, so none of them can head a ZWJ sequence.
         if vs16_follows?(ptr, i + 1, size) && in_ranges?(ptr[i].to_u32, VS16_WIDE)
           width += 2
-          prev_emoji = true
         else
           width += 1
-          prev_emoji = false
         end
+        prev_emoji = false
         i += 1
         joined = false
+        prev_zwj = false
       else
         cp, len = decode(ptr, i)
         if cp == 0x200D_u32
           # ZWJ only joins emoji sequences ("👨‍👩‍👧‍👦"); after anything else
-          # it is just a zero-width format character.
-          joined = prev_emoji
-        elsif joined
-          joined = false # ZWJ-joined: adds no cells
+          # it is just a zero-width format character. A doubled ZWJ breaks
+          # the run (GB11 allows only Extend* between the pictographs).
+          joined = prev_emoji && !prev_zwj
+          prev_zwj = true
         else
-          w = char_width(cp)
-          if w == 1 && vs16_follows?(ptr, i + len, size) && in_ranges?(cp, VS16_WIDE)
-            w = 2
+          entry = char_width_entry(cp)
+          # Swallow the ZWJ-joined scalar only when it is itself pictographic
+          # (GB11's right-hand side is Extended_Pictographic): regional
+          # indicators are not, and a ZWJ followed by a non-emoji scalar
+          # must not hide what follows.
+          emoji_join = joined && (entry & WIDTH_EXTPICT_BIT) != 0
+          # A ZWJ whose successor is not pictographic is a failed join:
+          # the emoji run is over even if the successor is zero-width.
+          zwj_failed = joined && !emoji_join
+          joined = false
+          prev_zwj = false
+          unless emoji_join
+            w = (entry & 0x3_u8).to_i
+            vs16_widened = w == 1 && (entry & WIDTH_VS16_BIT) != 0 &&
+                           vs16_follows?(ptr, i + len, size)
+            w = 2 if vs16_widened
+            width += w
+            if w == 0
+              # Zero-width scalars that cannot appear inside an emoji ZWJ
+              # run (GB4-ish format characters, Hangul jamo vowels/finals)
+              # end any pending join; combining marks, variation selectors
+              # and skin tones let it continue (GB11: ExtPict Extend* ZWJ).
+              if zwj_failed || cp == 0x200B_u32 || cp == 0x2060_u32 || cp == 0xFEFF_u32 ||
+                 (0x1160_u32 <= cp <= 0x11FF_u32) || (0xD7B0_u32 <= cp <= 0xD7FF_u32)
+                prev_emoji = false
+              end
+            elsif vs16_widened
+              # A VS16-widened base heads a ZWJ sequence only when it is
+              # pictographic (❤️ is; digits, '#' and '*' are not).
+              prev_emoji = (entry & WIDTH_EXTPICT_BIT) != 0
+            else
+              # Only a real emoji (2 cells via Emoji_Presentation) arms the
+              # ZWJ join — plain wide scalars like CJK ideographs do not.
+              prev_emoji = w == 2 && (entry & WIDTH_EMOJI_BIT) != 0
+            end
           end
-          width += w
-          prev_emoji = w == 2 unless w == 0
         end
         i += len
       end
@@ -155,11 +198,19 @@ module SpanWidth
   # excluded by contract and never reach here).
   @[AlwaysInline]
   private def char_width(cp : UInt32) : Int32
-    # Below U+0300 (the first zero-cell mark) everything is narrow.
-    return 1 if cp < 0x300
+    (char_width_entry(cp) & 0x3_u8).to_i
+  end
+
+  # The raw packed table byte for a scalar: cell width in bits 0-1, plus
+  # emoji property bits (see tables.cr). ASCII is handled on the byte fast
+  # path and never carries property bits; everything else comes from the
+  # tables (© and ® at U+00A9/U+00AE already carry emoji bits).
+  @[AlwaysInline]
+  private def char_width_entry(cp : UInt32) : UInt8
+    return 1_u8 if cp < 0x80
     WIDTH_PAGES.unsafe_fetch(
       (WIDTH_INDEX.unsafe_fetch((cp >> 8).to_i).to_i << 8) + (cp & 0xFF).to_i
-    ).to_i
+    )
   end
 
   # True if the bytes at offset `i` start U+FE0F (variation selector-16).
@@ -188,8 +239,8 @@ module SpanWidth
   # Development-time contract validation; only reachable when compiled
   # with `-Dspan_width_debug`, and eliminated entirely otherwise.
   private def validate_contract!(bytes : Slice(UInt8)) : Nil
-    ptr  = bytes.to_unsafe
-    i    = 0
+    ptr = bytes.to_unsafe
+    i = 0
     size = bytes.size
     while i < size
       b = ptr[i]

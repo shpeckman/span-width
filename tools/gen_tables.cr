@@ -40,8 +40,8 @@ module GenTables
   INCB_SHIFT  = 5
 
   def run
-    version      = "17.0.0"
-    out_path     = "src/span-width/tables.cr"
+    version = "17.0.0"
+    out_path = "src/span-width/tables.cr"
     grapheme_out = "src/span-width/grapheme_tables.cr"
     dir : String? = nil
 
@@ -56,11 +56,11 @@ module GenTables
 
     eaw, dgc, emoji, gbp, dcp = load_sources(version, dir)
 
-    zero       = BitArray.new(MAX_CP + 1)
-    wide       = BitArray.new(MAX_CP + 1)
-    emoji_yes  = BitArray.new(MAX_CP + 1)
+    zero = BitArray.new(MAX_CP + 1)
+    wide = BitArray.new(MAX_CP + 1)
+    emoji_yes = BitArray.new(MAX_CP + 1)
     emoji_pres = BitArray.new(MAX_CP + 1)
-    extpict    = BitArray.new(MAX_CP + 1)
+    extpict = BitArray.new(MAX_CP + 1)
 
     parse_ranges(eaw) do |first, last, fields|
       prop = fields[1]
@@ -84,11 +84,11 @@ module GenTables
 
     # Explicit zero-width additions on top of general categories Mn/Me.
     {
-      {0x200B_u32,  0x200D_u32},   # ZWSP, ZWNJ, ZWJ
-      {0x2060_u32,  0x2060_u32},   # word joiner
-      {0xFEFF_u32,  0xFEFF_u32},   # BOM / zero-width no-break space
-      {0x1160_u32,  0x11FF_u32},   # Hangul jamo medial vowels & final consonants
-      {0xD7B0_u32,  0xD7FF_u32},   # Hangul jamo extended-B (vowels/finals)
+      {0x200B_u32, 0x200D_u32},   # ZWSP, ZWNJ, ZWJ
+      {0x2060_u32, 0x2060_u32},   # word joiner
+      {0xFEFF_u32, 0xFEFF_u32},   # BOM / zero-width no-break space
+      {0x1160_u32, 0x11FF_u32},   # Hangul jamo medial vowels & final consonants
+      {0xD7B0_u32, 0xD7FF_u32},   # Hangul jamo extended-B (vowels/finals)
       {0x1F3FB_u32, 0x1F3FF_u32}, # emoji skin-tone modifiers
       {0xE0001_u32, 0xE007F_u32}, # tag characters
     }.each { |(first, last)| fill(zero, first, last) }
@@ -102,15 +102,22 @@ module GenTables
       vs16[cp] = true if emoji_yes[cp] && !emoji_pres[cp] && !wide[cp] && !zero[cp]
     end
 
-    # Flat per-scalar width table: 0, 1 or 2 cells.
+    # Flat per-scalar width table. Low 2 bits: cell width (0, 1 or 2).
+    # Bit 7: Emoji_Presentation=Yes (width-2 emoji that can head a ZWJ
+    # sequence). Bit 6: narrow emoji base widened by U+FE0F. Bit 5:
+    # Extended_Pictographic (GB11 join target). The runtime never does
+    # range searches in its hot path — everything is in the page byte.
     widths = Bytes.new(MAX_CP + 1, 1_u8)
     (MAX_CP + 1).times do |cp|
       widths[cp] = 0_u8 if zero[cp]
       widths[cp] = 2_u8 if wide[cp]
+      widths[cp] |= 0x80_u8 if emoji_pres[cp]
+      widths[cp] |= 0x40_u8 if vs16[cp]
+      widths[cp] |= 0x20_u8 if extpict[cp]
     end
     width_index, width_pages = two_level(widths)
 
-    write_widths(out_path, version, ranges(zero), ranges(wide), ranges(vs16), width_index, width_pages)
+    write_widths(out_path, version, ranges(zero), ranges(wide), ranges(emoji_pres), ranges(extpict), ranges(vs16), width_index, width_pages)
 
     # --- grapheme cluster break tables -----------------------------------
 
@@ -141,7 +148,7 @@ module GenTables
   # deduplicates the pages, and returns {page_index, unique_pages}.
   def two_level(flat : Bytes) : {Array(Int32), Array(Bytes)}
     unique_pages = [] of Bytes
-    index        = [] of Int32
+    index = [] of Int32
     ((MAX_CP + 1) // 256).times do |page|
       bytes = flat[page * 256, 256]
       if found = unique_pages.index { |u| u == bytes }
@@ -201,7 +208,7 @@ module GenTables
   end
 
   def fill(bits : BitArray, first : UInt32, last : UInt32) : Nil
-    cp   = first.to_i
+    cp = first.to_i
     stop = last.to_i
     while cp <= stop
       bits[cp] = true
@@ -210,7 +217,7 @@ module GenTables
   end
 
   def fill_bytes(bytes : Bytes, first : UInt32, last : UInt32, value : UInt8) : Nil
-    cp   = first.to_i
+    cp = first.to_i
     stop = last.to_i
     while cp <= stop
       bytes[cp] = value
@@ -220,8 +227,8 @@ module GenTables
 
   def ranges(bits : BitArray) : Array({UInt32, UInt32})
     result = [] of {UInt32, UInt32}
-    cp     = 0
-    max    = bits.size
+    cp = 0
+    max = bits.size
     while cp < max
       if bits[cp]
         first = cp
@@ -237,15 +244,17 @@ module GenTables
     result
   end
 
-  def write_widths(path : String, version : String, zero, wide, vs16, index : Array(Int32), pages : Array(Bytes)) : Nil
+  def write_widths(path : String, version : String, zero, wide, emoji_pres_ranges, extpict_ranges, vs16, index : Array(Int32), pages : Array(Bytes)) : Nil
     File.open(path, "w") do |io|
       io << "# GENERATED FILE — do not edit by hand.\n"
       io << "# Unicode " << version << ". Regenerate with:\n"
       io << "#   crystal run tools/gen_tables.cr -- --version " << version << '\n'
       io << "# Sources: EastAsianWidth.txt, DerivedGeneralCategory.txt, emoji-data.txt\n\n"
       io << "module SpanWidth\n"
-      io << "  # Two-level per-scalar width table (0, 1 or 2 cells):\n"
+      io << "  # Two-level per-scalar width table:\n"
       io << "  #   WIDTH_PAGES[WIDTH_INDEX[cp >> 8] * 256 + (cp & 0xFF)]\n"
+      io << "  # Packed byte: bits 0-1 = cell width (0/1/2), bit 5 = Extended_Pictographic,\n"
+      io << "  # bit 6 = narrow emoji base widened by U+FE0F, bit 7 = Emoji_Presentation.\n"
       io << "  # " << pages.size << " unique 256-scalar pages, " << index.size << " page slots.\n"
       emit_scalars io, "WIDTH_INDEX", index
       io << '\n'
@@ -258,13 +267,20 @@ module GenTables
       io << "\n  # Two-cell scalars: East Asian Wide & Fullwidth (includes emoji\n"
       io << "  # with Emoji_Presentation=Yes).\n"
       emit_ranges io, "WIDE", wide
+      io << "\n  # Emoji_Presentation=Yes scalars: rendered 2 cells wide; a ZWJ\n"
+      io << "  # directly after one can start an emoji sequence (GB11).\n"
+      emit_ranges io, "EMOJI", emoji_pres_ranges
+      io << "\n  # Extended_Pictographic scalars: the set a ZWJ can join into an\n"
+      io << "  # emoji sequence (GB11) — plain CJK and regional indicators are\n"
+      io << "  # wide/emoji but NOT pictographic, so they never join.\n"
+      emit_ranges io, "EXTPICT", extpict_ranges
       io << "\n  # Narrow emoji bases: rendered 2 cells wide when followed by U+FE0F.\n"
       emit_ranges io, "VS16_WIDE", vs16
       io << "end\n"
     end
     STDERR.puts "wrote #{path}: " \
-                "ZERO=#{zero.size} ranges, WIDE=#{wide.size} ranges, VS16_WIDE=#{vs16.size} ranges, " \
-                "#{pages.size} unique width pages"
+                "ZERO=#{zero.size} ranges, WIDE=#{wide.size} ranges, EMOJI=#{emoji_pres_ranges.size} ranges, " \
+                "EXTPICT=#{extpict_ranges.size} ranges, VS16_WIDE=#{vs16.size} ranges, #{pages.size} unique width pages"
   end
 
   def write_grapheme(path : String, version : String, index : Array(Int32), pages : Array(Bytes)) : Nil
